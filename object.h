@@ -4,9 +4,17 @@
 struct object_parser {
 	struct object **obj_hash;
 	int nr_objs, obj_hash_size;
+
+	/* TODO: migrate alloc_states to mem-pool? */
+	struct alloc_state *blob_state;
+	struct alloc_state *tree_state;
+	struct alloc_state *commit_state;
+	struct alloc_state *tag_state;
+	struct alloc_state *object_state;
+	unsigned commit_count;
 };
 
-struct object_parser *object_parser_new(void);
+struct object_parser *object_parser_new(int is_the_repo);
 void object_parser_clear(struct object_parser *o);
 
 struct object_list {
