@@ -221,6 +221,12 @@ static int finish_object_disambiguation(struct disambiguate_state *ds,
 	return 0;
 }
 
+static int disambiguate_tag_only(const struct object_id *oid, void *cb_data_unused)
+{
+	int kind = oid_object_info(the_repository, oid, NULL);
+	return kind == OBJ_TAG;
+}
+
 static int disambiguate_commit_only(const struct object_id *oid, void *cb_data_unused)
 {
 	int kind = oid_object_info(the_repository, oid, NULL);
@@ -288,7 +294,8 @@ int set_disambiguate_hint_config(const char *var, const char *value)
 		{ "committish", disambiguate_committish_only },
 		{ "tree", disambiguate_tree_only },
 		{ "treeish", disambiguate_treeish_only },
-		{ "blob", disambiguate_blob_only }
+		{ "blob", disambiguate_blob_only },
+		{ "tag", disambiguate_tag_only }
 	};
 	int i;
 
@@ -346,7 +353,6 @@ static int show_ambiguous_object(const struct object_id *oid, void *data)
 	struct strbuf desc = STRBUF_INIT;
 	int type;
 
-
 	if (ds->fn && !ds->fn(oid, ds->cb_data))
 		return 0;
 
@@ -373,6 +379,40 @@ static int show_ambiguous_object(const struct object_id *oid, void *data)
 	return 0;
 }
 
+static int collect_ambiguous(const struct object_id *oid, void *data)
+{
+	oid_array_append(data, oid);
+	return 0;
+}
+
+static int sort_ambiguous(const void *a, const void *b)
+{
+	int a_type = oid_object_info(the_repository, a, NULL);
+	int b_type = oid_object_info(the_repository, b, NULL);
+	int a_type_sort;
+	int b_type_sort;
+
+	/*
+	 * Sorts by hash within the same object type, just as
+	 * oid_array_for_each_unique() would do.
+	 */
+	if (a_type == b_type)
+		return oidcmp(a, b);
+
+	/*
+	 * Between object types show tags, then commits, and finally
+	 * trees and blobs.
+	 *
+	 * The object_type enum is commit, tree, blob, tag, but we
+	 * want tag, commit, tree blob. Cleverly (perhaps too
+	 * cleverly) do that with modulus, since the enum assigns 1 to
+	 * commit, so tag becomes 0.
+	 */
+	a_type_sort = a_type % 4;
+	b_type_sort = b_type % 4;
+	return a_type_sort > b_type_sort ? 1 : -1;
+}
+
 static int get_short_oid(const char *name, int len, struct object_id *oid,
 			  unsigned flags)
 {
@@ -396,6 +436,8 @@ static int get_short_oid(const char *name, int len, struct object_id *oid,
 		ds.fn = disambiguate_treeish_only;
 	else if (flags & GET_OID_BLOB)
 		ds.fn = disambiguate_blob_only;
+	else if (flags & GET_OID_TAG)
+		ds.fn = disambiguate_tag_only;
 	else
 		ds.fn = default_disambiguate_hint;
 
@@ -404,6 +446,9 @@ static int get_short_oid(const char *name, int len, struct object_id *oid,
 	status = finish_object_disambiguation(&ds, oid);
 
 	if (!quietly && (status == SHORT_NAME_AMBIGUOUS)) {
+		struct oid_array collect = OID_ARRAY_INIT;
+		int ignored_hint = 0;
+
 		error(_("short SHA1 %s is ambiguous"), ds.hex_pfx);
 
 		/*
@@ -412,20 +457,27 @@ static int get_short_oid(const char *name, int len, struct object_id *oid,
 		 * that case, we still want to show them, so disable the hint
 		 * function entirely.
 		 */
-		if (!ds.ambiguous)
+		if (!ds.ambiguous) {
 			ds.fn = NULL;
+			ignored_hint = 1;
+		}
 
 		advise(_("The candidates are:"));
-		for_each_abbrev(ds.hex_pfx, show_ambiguous_object, &ds);
+		for_each_abbrev(ds.hex_pfx, collect_ambiguous, &collect);
+		QSORT(collect.oid, collect.nr, sort_ambiguous);
+
+		if (oid_array_for_each(&collect, show_ambiguous_object, &ds))
+			BUG("show_ambiguous_object shouldn't return non-zero");
+		oid_array_clear(&collect);
+
+		if (ignored_hint) {
+			warning(_("Your hint (via core.disambiguate or peel syntax) was ignored, we fell\n"
+				  "back to showing all object types since no object of the requested type\n"
+				  "matched the provide short SHA1 %s"), ds.hex_pfx);
+		}
 	}
 
 	return status;
-}
-
-static int collect_ambiguous(const struct object_id *oid, void *data)
-{
-	oid_array_append(data, oid);
-	return 0;
 }
 
 int for_each_abbrev(const char *prefix, each_abbrev_fn fn, void *cb_data)
@@ -923,9 +975,13 @@ static int peel_onion(const char *name, int len, struct object_id *oid,
 
 	lookup_flags &= ~GET_OID_DISAMBIGUATORS;
 	if (expected_type == OBJ_COMMIT)
-		lookup_flags |= GET_OID_COMMITTISH;
+		lookup_flags |= GET_OID_COMMIT;
+	else if (expected_type == OBJ_TAG)
+		lookup_flags |= GET_OID_TAG;
 	else if (expected_type == OBJ_TREE)
-		lookup_flags |= GET_OID_TREEISH;
+		lookup_flags |= GET_OID_TREE;
+	else if (expected_type == OBJ_BLOB)
+		lookup_flags |= GET_OID_BLOB;
 
 	if (get_oid_1(name, sp - name - 2, &outer, lookup_flags))
 		return -1;

@@ -415,6 +415,14 @@ void validate_cache_entries(const struct index_state *istate);
 enum object_type {
 	OBJ_BAD = -1,
 	OBJ_NONE = 0,
+	/*
+	 * Why have our our "real" object types in this order? They're
+	 * ordered topologically:
+	 *
+	 * tag(4)    -> commit(1), tree(2), blob(3)
+	 * commit(1) -> tree(2)
+	 * tree(2)   -> blob(3)
+	 */
 	OBJ_COMMIT = 1,
 	OBJ_TREE = 2,
 	OBJ_BLOB = 3,
@@ -1334,8 +1342,9 @@ struct object_context {
 #define GET_OID_TREE             010
 #define GET_OID_TREEISH          020
 #define GET_OID_BLOB             040
-#define GET_OID_FOLLOW_SYMLINKS 0100
-#define GET_OID_RECORD_PATH     0200
+#define GET_OID_TAG             0100
+#define GET_OID_FOLLOW_SYMLINKS 0200
+#define GET_OID_RECORD_PATH     0400
 #define GET_OID_ONLY_TO_DIE    04000
 
 #define GET_OID_DISAMBIGUATORS \

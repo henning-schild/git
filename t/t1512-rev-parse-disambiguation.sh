@@ -159,9 +159,13 @@ test_expect_failure 'two semi-ambiguous commit-ish' '
 	git log 0000000000...
 '
 
-test_expect_failure 'three semi-ambiguous tree-ish' '
+test_expect_success 'three semi-ambiguous tree-ish' '
 	# Likewise for tree-ish.  HEAD, v1.0.0 and HEAD^{tree} share
 	# the prefix but peeling them to tree yields the same thing
+	test_must_fail git rev-parse --verify 0000000000: &&
+
+	# For ^{tree} we can disambiguate because HEAD and v1.0.0 will
+	# be excluded.
 	git rev-parse --verify 0000000000^{tree}
 '
 
@@ -267,8 +271,12 @@ test_expect_success 'ambiguous commit-ish' '
 # There are three objects with this prefix: a blob, a tree, and a tag. We know
 # the blob will not pass as a treeish, but the tree and tag should (and thus
 # cause an error).
-test_expect_success 'ambiguous tags peel to treeish' '
-	test_must_fail git rev-parse 0000000000f^{tree}
+test_expect_success 'ambiguous tags peel to treeish or tree' '
+	test_must_fail git rev-parse 0000000000f: &&
+	git rev-parse 0000000000f^{tree} >stdout &&
+	test_line_count = 1 stdout &&
+	grep -q ^0000000000fd8bcc56 stdout
+
 '
 
 test_expect_success 'rev-parse --disambiguate' '
@@ -333,8 +341,15 @@ test_expect_success C_LOCALE_OUTPUT 'ambiguity hints' '
 test_expect_success C_LOCALE_OUTPUT 'ambiguity hints respect type' '
 	test_must_fail git rev-parse 000000000^{commit} 2>stderr &&
 	grep ^hint: stderr >hints &&
-	# 5 commits, 1 tag (which is a commitish), plus intro line
-	test_line_count = 7 hints
+	# 5 commits plus intro line
+	test_line_count = 6 hints &&
+	git rev-parse 000000000^{tag} >stdout &&
+	test_line_count = 1 stdout &&
+	grep -q ^0000000000f8f stdout &&
+	test_must_fail git rev-parse 000000000^{blob} 2>stderr &&
+	grep ^hint: stderr >hints &&
+	# 5 blobs plus intro line &&
+	test_line_count = 6 hints
 '
 
 test_expect_success C_LOCALE_OUTPUT 'failed type-selector still shows hint' '
@@ -344,21 +359,48 @@ test_expect_success C_LOCALE_OUTPUT 'failed type-selector still shows hint' '
 	echo 872 | git hash-object --stdin -w &&
 	test_must_fail git rev-parse ee3d^{commit} 2>stderr &&
 	grep ^hint: stderr >hints &&
-	test_line_count = 3 hints
+	test_line_count = 3 hints &&
+	grep ^warning stderr >warnings &&
+	grep -q "Your hint.*was ignored" warnings &&
+	grep -q "the provide short SHA1 ee3d" stderr
 '
 
 test_expect_success 'core.disambiguate config can prefer types' '
 	# ambiguous between tree and tag
 	sha1=0000000000f &&
 	test_must_fail git rev-parse $sha1 &&
-	git rev-parse $sha1^{commit} &&
+	# there is no commit so ^{commit} comes up empty
+	test_must_fail git rev-parse $sha1^{commit} &&
 	git -c core.disambiguate=committish rev-parse $sha1
 '
 
 test_expect_success 'core.disambiguate does not override context' '
 	# treeish ambiguous between tag and tree
 	test_must_fail \
-		git -c core.disambiguate=committish rev-parse $sha1^{tree}
+		git -c core.disambiguate=committish rev-parse $sha1: &&
+	# tree not ambiguous between tag and tree
+	git -c core.disambiguate=committish rev-parse $sha1^{tree}
+'
+
+test_expect_success C_LOCALE_OUTPUT 'ambiguous commits are printed by type first, then hash order' '
+	test_must_fail git rev-parse 0000 2>stderr &&
+	grep ^hint: stderr >hints &&
+	grep 0000 hints >objects &&
+	cat >expected <<-\EOF &&
+	tag
+	commit
+	tree
+	blob
+	EOF
+	awk "{print \$3}" <objects >objects.types &&
+	uniq <objects.types >objects.types.uniq &&
+	test_cmp expected objects.types.uniq &&
+	for type in tag commit tree blob
+	do
+		grep $type objects >$type.objects &&
+		sort $type.objects >$type.objects.sorted &&
+		test_cmp $type.objects.sorted $type.objects
+	done
 '
 
 test_done
