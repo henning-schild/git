@@ -1739,7 +1739,7 @@ sub process_file {
 		$subject = quote_subject($subject, $auto_8bit_encoding);
 	}
 
-	if (defined $sauthor and $sauthor ne $sender) {
+	if (defined $sauthor) {
 		$message = "From: $author\n\n$message";
 		if (defined $author_encoding) {
 			if ($has_content_type) {
